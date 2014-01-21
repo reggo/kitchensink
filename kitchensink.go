@@ -1,26 +1,27 @@
 package kitchensink
 
 import (
+	"errors"
 	"math"
 	"math/rand"
 
-	"github.com/reggo/common"
-	"github.com/reggo/kitchensink/util"
-	"github.com/reggo/loss"
-	"github.com/reggo/regularize"
-	"github.com/reggo/scale"
+	//"github.com/reggo/common"
+	//"github.com/reggo/loss"
+	predHelp "github.com/reggo/predict"
+	//"github.com/reggo/regularize"
 	"github.com/reggo/train"
 
+	"github.com/gonum/floats"
 	"github.com/gonum/matrix/mat64"
 )
 
+// TODO: Generalize fitting method to allow the space binning thing
+
+const grainSize = 100
+
 type Sink struct {
-	Kernel       Kernel
-	InputScaler  scale.Scaler
-	OutputScaler scale.Scaler
-	Loss         loss.Losser
-	NumFeatures  int
-	Regularizer  regularize.Regularizer
+	kernel    Kernel
+	nFeatures int
 
 	inputDim       int
 	outputDim      int
@@ -30,43 +31,79 @@ type Sink struct {
 }
 
 // NewSink returns a sink struct with the defaults
-func NewSink(nFeatures int, kernel Kernel) *Sink {
+func NewSink(nFeatures int, kernel Kernel, inputDim, outputDim int) *Sink {
 	sink := &Sink{
-		InputScaler:  &scale.Normal{},
-		OutputScaler: &scale.Normal{},
-		Loss:         loss.SquaredDistance{},
-		NumFeatures:  nFeatures,
-		Kernel:       kernel,
-		Regularizer:  regularize.None{},
+		nFeatures: nFeatures,
+		kernel:    kernel,
+		inputDim:  inputDim,
+		outputDim: outputDim,
 	}
+	features := mat64.NewDense(sink.nFeatures, inputDim, nil)
+	sink.kernel.Generate(sink.nFeatures, inputDim, features)
+	sink.features = features
+	b := make([]float64, sink.nFeatures)
+	for i := range b {
+		b[i] = rand.Float64() * math.Pi * 2
+	}
+	sink.b = b
 	return sink
 }
 
-// TODO: Generalize fitting method to allow the space binning thing
+func (s *Sink) InputDim() int {
+	return s.inputDim
+}
 
+func (s *Sink) OutputDim() int {
+	return s.outputDim
+}
+
+func (s *Sink) NumFeatures() int {
+	return s.nFeatures
+}
+
+// IsLinear signifies that the prediction is a linear function of the parameters
+func (s *Sink) IsLinear() bool {
+	return true
+}
+
+// IsConvex signifies that the prediction is a convex funciton of the parameters
+func (s *Sink) IsConvex() bool {
+	return true
+}
+
+func (s *Sink) NumParameters() int {
+	return s.outputDim * s.nFeatures
+}
+
+func (s *Sink) Parameters(p []float64) {
+	if len(p) != s.NumFeatures() {
+		panic("sink: parameter size mismatch")
+	}
+	rm := s.featureWeights.RawMatrix()
+	copy(p, rm.Data)
+}
+
+func (s *Sink) SetParameters(p []float64) {
+	if len(p) != s.NumFeatures() {
+		panic("sink: parameter size mismatch")
+	}
+	rm := s.featureWeights.RawMatrix()
+	copy(rm.Data, p)
+}
+
+// TODO: Add some comment about losser and regularizer are nil
+
+/*
 // Train trains the kitchen sink with the given inputs and outputs and the given weights
-// Currently only works for one output
-func (sink *Sink) Train(inputs, outputs *mat64.Dense, weights []float64) (err error) {
+func (sink *Sink) Train(inputs, outputs mat64.Matrix, weights []float64, losser loss.Losser, regularizer regularize.Regularizer) (err error) {
 
 	err = common.VerifyInputs(inputs, outputs, weights)
 	if err != nil {
 		return err
 	}
 
-	nSamples, inputDim := inputs.Dims()
+	_, inputDim := inputs.Dims()
 	_, outputDim := outputs.Dims()
-
-	if len(weights) == 0 {
-		weights = make([]float64, nSamples)
-		for i := range weights {
-			weights[i] = 1
-		}
-	}
-
-	scale.ScaleTrainingData(inputs, outputs, sink.InputScaler, sink.OutputScaler)
-	defer func() {
-		err = scale.UnscaleTrainingData(inputs, outputs, sink.InputScaler, sink.OutputScaler)
-	}()
 
 	// Generate the features
 	features := mat64.NewDense(sink.NumFeatures, inputDim, nil)
@@ -81,9 +118,12 @@ func (sink *Sink) Train(inputs, outputs *mat64.Dense, weights []float64) (err er
 	}
 	sink.b = b
 
+	// See if outputs can be multiplied
+	outputMul, outputIsMulMatrix := outputs.(train.MulMatrix)
+
 	// Given the features, train the weights
 	// See if can use simple linear solve
-	if train.IsLinearSolveRegularizer(sink.Regularizer) && train.IsLinearSolveLosser(sink.Loss) {
+	if train.IsLinearSolveRegularizer(regularizer) && train.IsLinearSolveLosser(losser) && outputIsMulMatrix {
 		// It can be solved with a linear solve, so construct wrapper and make the call
 		lin := &linearSink{
 			b:         b,
@@ -91,108 +131,142 @@ func (sink *Sink) Train(inputs, outputs *mat64.Dense, weights []float64) (err er
 			features:  features,
 		}
 		var err error
-		sink.featureWeights, err = train.LinearSolve(lin, inputs, outputs, nil, sink.Regularizer)
+		sink.featureWeights = train.LinearSolve(lin, nil, inputs, outputMul, nil, regularizer)
+		if sink.featureWeights == nil {
+			// TODO: Improve error message
+			return errors.New("error training")
+		}
 		return err
 	}
 	panic("Not yet coded for non-SquaredDistance losser")
-}
-
-/*
-func trainSqDist(inputs, outputs *mat64.Dense, weights []float64, features [][]float64, b []float64) (featureWeights [][]float64) {
-
-
-
-	nSamples := len(inputs)
-	nFeatures := len(features)
-	nOutputs := len(outputs[0])
-	// Compute Z for all of the features, and store it in the matrix
-	zMat := matrix.NewDense(nSamples, nFeatures, nil)
-	sqrt2OverD := math.Sqrt(2.0 / float64(nFeatures))
-	for i := 0; i < nSamples; i++ {
-		for j := 0; j < nFeatures; j++ {
-			zMat.Set(i, j, util.ComputeZ(inputs[i], features[j], b[j], sqrt2OverD))
-		}
-	}
-
-	yMat := matrix.NewDense(nSamples, nOutputs, nil)
-	for i := 0; i < nSamples; i++ {
-		for j := 0; j < nOutputs; j++ {
-			yMat.Set(i, j, outputs[i][j])
-		}
-	}
-
-	alpha := matrix.Solve(zMat, yMat)
-
-	featureWeights = make([][]float64, nFeatures)
-	for i := range features {
-		featureWeights[i] = make([]float64, nOutputs)
-		for j := range featureWeights[i] {
-			featureWeights[i][j] = alpha.At(i, j)
-		}
-	}
-	return
 }
 */
 
 // Predict returns the output at a given input. Returns nil if the length of the inputs
 // does not match the trained number of inputs. The input value is unchanged, but
 // will be modified during a call to the method
-func (sink *Sink) Predict(input []float64, output []float64) error {
+func (sink *Sink) Predict(input []float64, output []float64) ([]float64, error) {
 	if len(input) != sink.inputDim {
-		return nil
+		return nil, errors.New("input dimension mismatch")
 	}
-	output = make([]float64, sink.outputDim)
-
-	sink.InputScaler.Scale(input)
-	defer sink.InputScaler.Unscale(input)
-
-	util.Predict(input, sink.features, sink.b, sink.featureWeights, output)
-	sink.OutputScaler.Unscale(output)
-	return output
-}
-
-/*
-// PredictSlice has the same behavior as Predict except it predicts a list of inputs concurrently
-// It uses runtime.GOMAXPROCS to determine the level of concurrency
-func (sink *Sink) PredictSlice(inputs *mat64.Dense) (outputs *mat64.Dense) {
-
-	nSamples, inputDim := inputs.Dims()
-	if len(input) != sink.inputDim {
-		return nil
-	}
-	outputs = make([][]float64, len(inputs))
-	for i := range outputs {
-		outputs[i] = make([]float64, sink.outputDim)
+	if len(output) != sink.outputDim {
+		return nil, errors.New("output dimension mismatch")
 	}
 
-	scale.ScaleData(sink.InputScaler, inputs)
-	defer scale.UnscaleData(sink.InputScaler, inputs)
-	util.ParallelPredict(inputs, sink.features, sink.b, sink.featureWeights, outputs)
-	scale.UnscaleData(sink.OutputScaler, outputs)
-	return outputs
-}
-*/
+	if output == nil {
+		output = make([]float64, sink.outputDim)
+	}
 
-// linearSink is an interface for having the kitchen sink algorithm
-// be able to use the linear solve
-type linearSink struct {
-	features  *mat64.Dense
-	b         []float64
-	nFeatures int
+	predict(input, sink.features, sink.b, sink.featureWeights, output)
+	return output, nil
 }
 
-func (l *linearSink) CanParallelize() bool {
-	return true
+func (sink *Sink) PredictBatch(inputs mat64.Matrix, outputs mat64.Mutable) (mat64.Mutable, error) {
+	batch := batchPredictor{
+		features:       sink.features,
+		featureWeights: sink.featureWeights,
+		b:              sink.b,
+	}
+	return predHelp.BatchPredict(batch, inputs, outputs, sink.inputDim, sink.outputDim, grainSize)
 }
 
-func (l *linearSink) NumFeatures() int {
-	return l.nFeatures
+// batchPredictor is a wrapper for BatchPredict to allow parallel predictions
+type batchPredictor struct {
+	features       *mat64.Dense
+	featureWeights *mat64.Dense
+	b              []float64
 }
 
-func (l *linearSink) Featurize(input, feature []float64) {
-	// compute the
-	sqrt2OverD := math.Sqrt(2.0 / float64(l.nFeatures))
+// There is no temporary memory involved, so can just return itself
+func (b batchPredictor) NewPredictor() predHelp.Predictor {
+	return b
+}
+
+func (b batchPredictor) Predict(input, output []float64) {
+	predict(input, b.features, b.b, b.featureWeights, output)
+}
+
+// ComputeZ computes the value of z with the given feature vector and b value.
+// Sqrt2OverD = math.Sqrt(2.0 / len(nFeatures))
+func computeZ(input, feature []float64, b float64, sqrt2OverD float64) float64 {
+	dot := floats.Dot(input, feature)
+	return sqrt2OverD * (math.Cos(dot + b))
+}
+
+// wrapper for predict, assumes all inputs are correct
+func predict(input []float64, features *mat64.Dense, b []float64, featureWeights *mat64.Dense, output []float64) {
+	for i := range output {
+		output[i] = 0
+	}
+
+	nFeatures, outputDim := features.Dims()
+
+	sqrt2OverD := math.Sqrt(2.0 / float64(nFeatures))
+	//for i, feature := range features {
+	for i := 0; i < nFeatures; i++ {
+		z := computeZ(input, features.RowView(i), b[i], sqrt2OverD)
+		for j := 0; j < outputDim; j++ {
+			output[j] += z * featureWeights.At(i, j)
+		}
+	}
+}
+
+// NewFeaturizer returns a featurizer for use in training routines.
+func (s *Sink) NewFeaturizer() train.Featurizer {
+	// The sink featurize method can be called in parallel normally, so
+	// nothing is created
+	return s
+}
+
+// Featurize computes the feature values for the input and stores them in
+// place into Featurize
+func (sink *Sink) Featurize(input, feature []float64) {
+	sqrt2OverD := math.Sqrt(2.0 / float64(sink.nFeatures))
 	for i := range feature {
-		feature[i] = util.ComputeZ(input, l.features.RowView(i), l.b[i], sqrt2OverD)
+		feature[i] = computeZ(input, sink.features.RowView(i), sink.b[i], sqrt2OverD)
+	}
+}
+
+func (s *Sink) NewLossDeriver() train.LossDeriver {
+	return &lossDerivWrapper{
+		s: s,
+	}
+}
+
+// TODO: Figure out how to couple this with the struct itself better to
+// allow this to be exposed to other functions
+// TODO: Should be something about precomputing or not precomputing all of the features
+// Decouple settings from training to allow different things.
+// Maybe don't have the Train at all for sinks? Just provide the train routines? Or Train on the type
+// is simple, but reggo/train contains more complicated functions if necessary?
+// DerivSink is a wrapper for training with gradient-based optimization
+type lossDerivWrapper struct {
+	s *Sink
+}
+
+func (d *lossDerivWrapper) Predict(input, predOutput []float64) {
+	predict(input, d.s.features, d.s.b, d.s.featureWeights, predOutput)
+}
+
+func (d *lossDerivWrapper) Deriv(featurizedInput, predOutput, dLossDPred, dLossDWeight []float64) {
+	// Form a matrix that has the underlying elements as dLossDWeight so the values are modified in place
+	//lossMat := mat64.NewDense(d.s.nFeatures, d.s.outputDim, dLossDWeight)
+	deriv(featurizedInput, dLossDPred, dLossDWeight)
+}
+
+func deriv(z []float64, dLossDPred []float64, dLossDWeight []float64) {
+	// TODO: Can probably make this faster if we don't bother having the at, and instead work on the slice directly
+
+	// dLossDWeight_ij = \sum_k dLoss/dPred_k * dPred_k / dWeight_j
+
+	// Remember, the parameters are stored in row-major order
+
+	nOutput := len(dLossDPred)
+	// The prediction is just weights * z, so dPred_jDWeight_i = z_i
+	// dLossDWeight = dLossDPred * dPredDWeight
+	for i, zVal := range z {
+		for j := 0; j < nOutput; j++ {
+			dLossDWeight[i*nOutput+j] = zVal * dLossDPred[j]
+		}
 	}
 }

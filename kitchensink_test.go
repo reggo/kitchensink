@@ -2,13 +2,15 @@ package kitchensink
 
 import (
 	"fmt"
-	//"math"
+	"math"
 	//"math/rand"
 	//"runtime"
 	"testing"
 
 	//"github.com/gonum/blas/cblas"
 	//"github.com/gonum/matrix/mat64"
+
+	"github.com/gonum/floats"
 
 	"github.com/reggo/regtest"
 	"github.com/reggo/train"
@@ -96,6 +98,31 @@ func TestInputOutputDim(t *testing.T) {
 	for i, test := range sinkIniters {
 		s := testSinks[i]
 		regtest.TestInputOutputDim(t, s, test.inputDim, test.outputDim, test.name)
+	}
+}
+
+func TestComputeZ(t *testing.T) {
+	for _, test := range []struct {
+		x         []float64
+		feature   []float64
+		b         float64
+		z         float64
+		nFeatures float64
+		name      string
+	}{
+		{
+			name:      "General",
+			x:         []float64{2.0, 1.0},
+			feature:   []float64{8.1, 6.2},
+			b:         0.8943,
+			nFeatures: 50,
+			z:         -0.07188374176,
+		},
+	} {
+		z := computeZ(test.x, test.feature, test.b, math.Sqrt(2.0/test.nFeatures))
+		if floats.EqualWithinAbsOrRel(z, test.z, 1e-14, 1e-14) {
+			t.Errorf("z mismatch for case %v. %v expected, %v found", test.name, test.z, z)
+		}
 	}
 }
 

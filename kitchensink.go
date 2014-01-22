@@ -17,8 +17,6 @@ import (
 
 // TODO: Generalize fitting method to allow the space binning thing
 
-const grainSize = 100
-
 type Sink struct {
 	kernel    Kernel
 	nFeatures int
@@ -41,6 +39,7 @@ func NewSink(nFeatures int, kernel Kernel, inputDim, outputDim int) *Sink {
 	features := mat64.NewDense(sink.nFeatures, inputDim, nil)
 	sink.kernel.Generate(sink.nFeatures, inputDim, features)
 	sink.features = features
+	sink.featureWeights = mat64.NewDense(sink.nFeatures, outputDim, nil)
 	b := make([]float64, sink.nFeatures)
 	for i := range b {
 		b[i] = rand.Float64() * math.Pi * 2
@@ -71,20 +70,29 @@ func (s *Sink) IsConvex() bool {
 	return true
 }
 
+func (s *Sink) GrainSize() int {
+	return 500
+}
+
 func (s *Sink) NumParameters() int {
 	return s.outputDim * s.nFeatures
 }
 
-func (s *Sink) Parameters(p []float64) {
-	if len(p) != s.NumFeatures() {
-		panic("sink: parameter size mismatch")
+func (s *Sink) Parameters(p []float64) []float64 {
+	if p == nil {
+		p = make([]float64, s.NumParameters())
+	} else {
+		if len(p) != s.NumParameters() {
+			panic("sink: parameter size mismatch")
+		}
 	}
 	rm := s.featureWeights.RawMatrix()
 	copy(p, rm.Data)
+	return p
 }
 
 func (s *Sink) SetParameters(p []float64) {
-	if len(p) != s.NumFeatures() {
+	if len(p) != s.NumParameters() {
 		panic("sink: parameter size mismatch")
 	}
 	rm := s.featureWeights.RawMatrix()
@@ -167,7 +175,7 @@ func (sink *Sink) PredictBatch(inputs mat64.Matrix, outputs mat64.Mutable) (mat6
 		featureWeights: sink.featureWeights,
 		b:              sink.b,
 	}
-	return predHelp.BatchPredict(batch, inputs, outputs, sink.inputDim, sink.outputDim, grainSize)
+	return predHelp.BatchPredict(batch, inputs, outputs, sink.inputDim, sink.outputDim, sink.GrainSize())
 }
 
 // batchPredictor is a wrapper for BatchPredict to allow parallel predictions

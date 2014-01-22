@@ -2,14 +2,97 @@ package kitchensink
 
 import (
 	"fmt"
-	"math"
-	"math/rand"
-	"runtime"
+	//"math"
+	//"math/rand"
+	//"runtime"
 	"testing"
 
-	"github.com/gonum/blas/cblas"
-	"github.com/gonum/matrix/mat64"
+	//"github.com/gonum/blas/cblas"
+	//"github.com/gonum/matrix/mat64"
+
+	"github.com/reggo/regtest"
+	"github.com/reggo/train"
 )
+
+var (
+	sink = &Sink{}
+	_    = train.Trainable(sink)
+)
+
+type sinkIniter struct {
+	nFeatures int
+	kernel    Kernel
+	inputDim  int
+	outputDim int
+	name      string
+}
+
+var testSinks []*Sink
+
+var sinkIniters []*sinkIniter = []*sinkIniter{
+
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		name:      "nFeatures > inputDim > outputDim",
+	},
+	{
+		nFeatures: 13,
+		kernel:    IsoSqExp{},
+		inputDim:  3,
+		outputDim: 5,
+	},
+	{
+		nFeatures: 2,
+		kernel:    IsoSqExp{},
+		inputDim:  3,
+		outputDim: 5,
+	},
+	{
+		nFeatures: 2,
+		kernel:    IsoSqExp{},
+		inputDim:  6,
+		outputDim: 4,
+	},
+	{
+		nFeatures: 8,
+		kernel:    IsoSqExp{},
+		inputDim:  15,
+		outputDim: 3,
+	},
+	{
+		nFeatures: 8,
+		kernel:    IsoSqExp{},
+		inputDim:  4,
+		outputDim: 12,
+	},
+}
+
+func init() {
+	// Set up all of the test sinks
+	for _, initer := range sinkIniters {
+		s := NewSink(initer.nFeatures, initer.kernel, initer.inputDim, initer.outputDim)
+		testSinks = append(testSinks, s)
+	}
+
+}
+
+func TestGetAndSetParameters(t *testing.T) {
+	for i, test := range sinkIniters {
+		s := testSinks[i]
+		numParameters := s.NumParameters()
+		trueNparameters := test.nFeatures * test.outputDim
+		if numParameters != trueNparameters {
+			t.Errorf("case %v: NumParameter mismatch. expected %v, found %v", test.name, trueNparameters, numParameters)
+		}
+		fmt.Println(test.name)
+		regtest.TestGetAndSetParameters(t, s, test.name)
+	}
+}
+
+/*
 
 // TODO: Add real tests
 
@@ -76,11 +159,11 @@ func TestKitchenSink(t *testing.T) {
 			weights[i] = rand.Float64()
 		}
 		sink.Train(xTrain, yTrain, weights, nil, nil)
-	*/
+*/
 
-	/*
-		for i := range testPred {
-			fmt.Println(yTest[i][0], "\t", testPred[i][0], "\t", yTest[i][0]-testPred[i][0])
-		}
-	*/
-}
+/*
+	for i := range testPred {
+		fmt.Println(yTest[i][0], "\t", testPred[i][0], "\t", yTest[i][0]-testPred[i][0])
+	}
+*/
+//}

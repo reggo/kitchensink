@@ -92,6 +92,13 @@ func TestGetAndSetParameters(t *testing.T) {
 	}
 }
 
+func TestInputOutputDim(t *testing.T) {
+	for i, test := range sinkIniters {
+		s := testSinks[i]
+		regtest.TestInputOutputDim(t, s, test.inputDim, test.outputDim, test.name)
+	}
+}
+
 /*
 
 // TODO: Add real tests

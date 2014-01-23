@@ -157,14 +157,13 @@ func (sink *Sink) Predict(input []float64, output []float64) ([]float64, error) 
 	if len(input) != sink.inputDim {
 		return nil, errors.New("input dimension mismatch")
 	}
-	if len(output) != sink.outputDim {
-		return nil, errors.New("output dimension mismatch")
-	}
-
 	if output == nil {
 		output = make([]float64, sink.outputDim)
+	} else {
+		if len(output) != sink.outputDim {
+			return nil, errors.New("output dimension mismatch")
+		}
 	}
-
 	predict(input, sink.features, sink.b, sink.featureWeights, output)
 	return output, nil
 }
@@ -207,7 +206,8 @@ func predict(input []float64, features *mat64.Dense, b []float64, featureWeights
 		output[i] = 0
 	}
 
-	nFeatures, outputDim := features.Dims()
+	nFeatures, _ := features.Dims()
+	_, outputDim := featureWeights.Dims()
 
 	sqrt2OverD := math.Sqrt(2.0 / float64(nFeatures))
 	//for i, feature := range features {
@@ -215,6 +215,17 @@ func predict(input []float64, features *mat64.Dense, b []float64, featureWeights
 		z := computeZ(input, features.RowView(i), b[i], sqrt2OverD)
 		for j := 0; j < outputDim; j++ {
 			output[j] += z * featureWeights.At(i, j)
+		}
+	}
+}
+
+func predictFeaturized(featurizedInput []float64, featureWeights *mat64.Dense, output []float64) {
+	for i := range output {
+		output[i] = 0
+	}
+	for j, zval := range featurizedInput {
+		for i, weight := range featureWeights.RowView(j) {
+			output[i] += weight * zval
 		}
 	}
 }

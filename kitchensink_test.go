@@ -1,24 +1,28 @@
 package kitchensink
 
 import (
-	"fmt"
+	//"fmt"
 	"math"
-	//"math/rand"
+	"math/rand"
+	"strconv"
 	//"runtime"
 	"testing"
 
 	//"github.com/gonum/blas/cblas"
-	//"github.com/gonum/matrix/mat64"
+	"github.com/gonum/matrix/mat64"
 
 	"github.com/gonum/floats"
 
 	"github.com/reggo/regtest"
 	"github.com/reggo/train"
+
+	"fmt"
 )
 
 var (
 	sink = &Sink{}
 	_    = train.Trainable(sink)
+	_    = fmt.Println
 )
 
 type sinkIniter struct {
@@ -26,6 +30,7 @@ type sinkIniter struct {
 	kernel    Kernel
 	inputDim  int
 	outputDim int
+	nSamples  int
 	name      string
 }
 
@@ -38,6 +43,47 @@ var sinkIniters []*sinkIniter = []*sinkIniter{
 		kernel:    IsoSqExp{},
 		inputDim:  5,
 		outputDim: 3,
+		nSamples:  100,
+		name:      "nFeatures > inputDim > outputDim",
+	},
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		nSamples:  9,
+		name:      "",
+	},
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		nSamples:  101,
+		name:      "nFeatures > inputDim > outputDim",
+	},
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		nSamples:  1,
+		name:      "nFeatures > inputDim > outputDim",
+	},
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		nSamples:  2,
+		name:      "nFeatures > inputDim > outputDim",
+	},
+	{
+		nFeatures: 10,
+		kernel:    IsoSqExp{},
+		inputDim:  5,
+		outputDim: 3,
+		nSamples:  1006,
 		name:      "nFeatures > inputDim > outputDim",
 	},
 	{
@@ -45,38 +91,49 @@ var sinkIniters []*sinkIniter = []*sinkIniter{
 		kernel:    IsoSqExp{},
 		inputDim:  3,
 		outputDim: 5,
+		nSamples:  100,
 	},
 	{
 		nFeatures: 2,
 		kernel:    IsoSqExp{},
 		inputDim:  3,
 		outputDim: 5,
+		nSamples:  100,
 	},
 	{
 		nFeatures: 2,
 		kernel:    IsoSqExp{},
 		inputDim:  6,
 		outputDim: 4,
+		nSamples:  100,
 	},
 	{
 		nFeatures: 8,
 		kernel:    IsoSqExp{},
 		inputDim:  15,
 		outputDim: 3,
+		nSamples:  100,
 	},
 	{
 		nFeatures: 8,
 		kernel:    IsoSqExp{},
 		inputDim:  4,
 		outputDim: 12,
+		nSamples:  100,
 	},
 }
 
 func init() {
 	// Set up all of the test sinks
-	for _, initer := range sinkIniters {
+	for i, initer := range sinkIniters {
 		s := NewSink(initer.nFeatures, initer.kernel, initer.inputDim, initer.outputDim)
+		s.features = randomMat(initer.nFeatures, initer.inputDim)
+		s.featureWeights = randomMat(initer.nFeatures, initer.outputDim)
+		s.b = randomSlice(initer.nFeatures)
 		testSinks = append(testSinks, s)
+		if initer.name == "" {
+			initer.name = strconv.Itoa(i)
+		}
 	}
 
 }
@@ -89,7 +146,6 @@ func TestGetAndSetParameters(t *testing.T) {
 		if numParameters != trueNparameters {
 			t.Errorf("case %v: NumParameter mismatch. expected %v, found %v", test.name, trueNparameters, numParameters)
 		}
-		fmt.Println(test.name)
 		regtest.TestGetAndSetParameters(t, s, test.name)
 	}
 }
@@ -124,6 +180,175 @@ func TestComputeZ(t *testing.T) {
 			t.Errorf("z mismatch for case %v. %v expected, %v found", test.name, test.z, z)
 		}
 	}
+}
+
+func flatten(sos [][]float64) *mat64.Dense {
+	r := len(sos)
+	if r == 0 {
+		return mat64.NewDense(0, 0, nil)
+	}
+	c := len(sos[0])
+	mat := mat64.NewDense(r, c, nil)
+	for i := 0; i < r; i++ {
+		if len(sos[i]) != c {
+			panic("sos not a matrix")
+		}
+		for j := 0; j < c; j++ {
+			mat.Set(i, j, sos[i][j])
+		}
+	}
+	return mat
+}
+
+func TestPredictFeaturized(t *testing.T) {
+	for _, test := range []struct {
+		z              []float64
+		featureWeights [][]float64
+		output         []float64
+		Name           string
+	}{
+		{
+			Name: "General",
+			z:    []float64{1, 2, 3},
+			featureWeights: [][]float64{
+				{3, 4},
+				{1, 2},
+				{0.5, 0.4},
+			},
+			output: []float64{6.5, 9.2},
+		},
+	} {
+		zCopy := make([]float64, len(test.z))
+		copy(zCopy, test.z)
+		fwMat := flatten(test.featureWeights)
+		fwMatCopy := &mat64.Dense{}
+		fwMatCopy.Clone(fwMat)
+
+		output := make([]float64, len(test.output))
+
+		predictFeaturized(zCopy, fwMat, output)
+
+		// Test that z wasn't changed
+		if !floats.Equal(test.z, zCopy) {
+			t.Errorf("z changed during call")
+		}
+
+		if !floats.EqualApprox(output, test.output, 1e-14) {
+			t.Errorf("output doesn't match for test %v. Expected %v, found %v", test.Name, test.output, output)
+		}
+	}
+}
+
+func TestPrivatePredict(t *testing.T) {
+	for _, test := range []struct {
+		input          []float64
+		features       [][]float64
+		b              []float64
+		featureWeights [][]float64
+		Name           string
+	}{
+		{
+			input: []float64{8, 9, 10},
+			featureWeights: [][]float64{
+				{8, 9},
+				{0.4, 0.2},
+				{9.8, 1.6},
+				{-4, -8},
+			},
+			features: [][]float64{
+				{0.9, 0.8, 0.7},
+				{-0.7, 0.2, 15},
+				{1.5, 7.8, -2.4},
+				{9.7, 9.2, 1.2},
+			},
+			b:    []float64{0.7, 1.2, 0.2, 0.01234},
+			Name: "General",
+		},
+	} {
+		inputCopy := make([]float64, len(test.input))
+		copy(inputCopy, test.input)
+
+		fwMat := flatten(test.featureWeights)
+		fwMatCopy := &mat64.Dense{}
+		fwMatCopy.Clone(fwMat)
+
+		featureMat := flatten(test.features)
+		featureMatCopy := &mat64.Dense{}
+		featureMatCopy.Clone(featureMat)
+
+		bCopy := make([]float64, len(test.b))
+		copy(bCopy, test.b)
+
+		// This test assumes ComputeZ and PredictWithZ work
+		nOutput := len(test.featureWeights[0])
+		nFeatures := len(test.featureWeights)
+		zOutput := make([]float64, nOutput)
+		predOutput := make([]float64, nOutput)
+
+		for i := range predOutput {
+			predOutput[i] = rand.NormFloat64()
+			zOutput[i] = rand.NormFloat64()
+		}
+
+		sqrt2OverD := math.Sqrt(2.0 / float64(nFeatures))
+
+		z := make([]float64, nFeatures)
+		for i := range z {
+			z[i] = computeZ(test.input, featureMat.RowView(i), test.b[i], sqrt2OverD)
+		}
+		predictFeaturized(z, fwMat, zOutput)
+
+		predict(inputCopy, featureMatCopy, bCopy, fwMatCopy, predOutput)
+
+		// Check to make sure nothing changed
+		if !floats.Equal(inputCopy, test.input) {
+			t.Errorf("input has been modified")
+		}
+		if !floats.Equal(bCopy, test.b) {
+			t.Errorf("b has been modified")
+		}
+		if !fwMat.Equals(fwMatCopy) {
+			t.Errorf("feature weights changed")
+		}
+		if !featureMat.Equals(featureMatCopy) {
+			t.Errorf("features changed")
+		}
+		if !floats.EqualApprox(zOutput, predOutput, 1e-14) {
+			t.Errorf("Prediction doesn't match for case %v. Expected %v, found %v", test.Name, zOutput, predOutput)
+		}
+	}
+}
+
+func TestPredict(t *testing.T) {
+	for i, test := range sinkIniters {
+		s := testSinks[i]
+		inputs := randomMat(test.nSamples, test.inputDim)
+		trueOutputs := randomMat(test.nSamples, test.outputDim)
+
+		for j := 0; j < test.nSamples; j++ {
+			predict(inputs.RowView(j), s.features, s.b, s.featureWeights, trueOutputs.RowView(j))
+		}
+
+		regtest.TestPredictAndBatch(t, s, inputs, trueOutputs, test.name)
+	}
+}
+
+func randomSlice(l int) []float64 {
+	s := make([]float64, l)
+	for i := range s {
+		s[i] = rand.Float64()
+	}
+	return s
+}
+
+func randomMat(r, c int) *mat64.Dense {
+	m := mat64.NewDense(r, c, nil)
+	for i := 0; i < r; i++ {
+		for j := 0; j < c; j++ {
+			m.Set(i, j, rand.NormFloat64())
+		}
+	}
+	return m
 }
 
 /*

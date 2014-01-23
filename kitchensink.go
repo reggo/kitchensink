@@ -122,7 +122,7 @@ func (sink *Sink) Predict(input []float64, output []float64) ([]float64, error) 
 	return output, nil
 }
 
-func (sink *Sink) PredictBatch(inputs common.RowMatrix, outputs common.MutableRowMatrix) (mat64.Mutable, error) {
+func (sink *Sink) PredictBatch(inputs common.RowMatrix, outputs common.MutableRowMatrix) (common.MutableRowMatrix, error) {
 	batch := batchPredictor{
 		features:       sink.features,
 		featureWeights: sink.featureWeights,

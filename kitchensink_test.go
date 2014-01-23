@@ -1,28 +1,24 @@
 package kitchensink
 
 import (
-	//"fmt"
 	"math"
 	"math/rand"
 	"strconv"
-	//"runtime"
 	"testing"
 
-	//"github.com/gonum/blas/cblas"
+	"github.com/gonum/blas/cblas"
 	"github.com/gonum/matrix/mat64"
 
 	"github.com/gonum/floats"
 
 	"github.com/reggo/regtest"
+	"github.com/reggo/regularize"
 	"github.com/reggo/train"
-
-	"fmt"
 )
 
 var (
 	sink = &Sink{}
 	_    = train.Trainable(sink)
-	_    = fmt.Println
 )
 
 type sinkIniter struct {
@@ -124,6 +120,7 @@ var sinkIniters []*sinkIniter = []*sinkIniter{
 }
 
 func init() {
+	mat64.Register(cblas.Blas{})
 	// Set up all of the test sinks
 	for i, initer := range sinkIniters {
 		s := NewSink(initer.nFeatures, initer.kernel, initer.inputDim, initer.outputDim)
@@ -351,9 +348,52 @@ func randomMat(r, c int) *mat64.Dense {
 	return m
 }
 
-/*
+func TestDeriv(t *testing.T) {
+	for i, test := range sinkIniters {
+		sink := testSinks[i]
+		inputs := randomMat(test.nSamples, test.inputDim)
+		trueOutputs := randomMat(test.nSamples, test.outputDim)
+		regtest.TestDeriv(t, sink, inputs, trueOutputs, test.name)
+	}
+}
 
-// TODO: Add real tests
+// TODO: Need to update this when we have a training function
+
+func TestQuality(t *testing.T) {
+	// On a certain function we know that the prediction is good
+	// confirm that it is
+	nDim := 2
+	nTrain := 1600
+	xTrain, yTrain := generateRandomSamples(nTrain, nDim)
+
+	nTest := 1000
+	xTest, yTest := generateRandomSamples(nTest, nDim)
+
+	nFeatures := 300
+
+	sigmaSq := 0.01
+
+	kernel := &IsoSqExp{LogScale: math.Log(sigmaSq)}
+
+	sink := NewSink(nFeatures, kernel, nDim, nDim)
+
+	parameters := train.LinearSolve(sink, nil, xTrain, yTrain, nil, regularize.None{})
+	sink.SetParameters(parameters)
+
+	// Predict on new values
+	pred, err := sink.PredictBatch(xTest, nil)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+	for i := 0; i < nTest; i++ {
+		for j := 0; j < nDim; j++ {
+			diff := pred.At(i, j) - yTest.At(i, j)
+			if math.Abs(diff) > 1e-9 {
+				t.Errorf("Mismatch sample %v, output %v. Expected %v, Found %v", i, j, yTest.At(i, j), pred.At(i, j))
+			}
+		}
+	}
+}
 
 func testfunc(x float64) float64 {
 	return math.Sin(x/20) + x*x + 200
@@ -372,6 +412,7 @@ func generateRandomSamples(n, nDim int) (x, y *mat64.Dense) {
 	return
 }
 
+/*
 func TestKitchenSink(t *testing.T) {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	// generate data

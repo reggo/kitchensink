@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/rand"
 
-	//"github.com/reggo/common"
+	"github.com/reggo/common"
 	//"github.com/reggo/loss"
 	predHelp "github.com/reggo/predict"
 	//"github.com/reggo/regularize"
@@ -13,6 +13,8 @@ import (
 
 	"github.com/gonum/floats"
 	"github.com/gonum/matrix/mat64"
+
+	//"fmt"
 )
 
 // TODO: Generalize fitting method to allow the space binning thing
@@ -60,15 +62,11 @@ func (s *Sink) NumFeatures() int {
 	return s.nFeatures
 }
 
-// IsLinear signifies that the prediction is a linear function of the parameters
-func (s *Sink) IsLinear() bool {
-	return true
-}
+// Linear signifies that the prediction is a linear function of the parameters
+func (s *Sink) Linear() {}
 
-// IsConvex signifies that the prediction is a convex funciton of the parameters
-func (s *Sink) IsConvex() bool {
-	return true
-}
+// Convex signifies that the prediction is a convex funciton of the parameters
+func (s *Sink) Convex() {}
 
 func (s *Sink) GrainSize() int {
 	return 500
@@ -76,6 +74,13 @@ func (s *Sink) GrainSize() int {
 
 func (s *Sink) NumParameters() int {
 	return s.outputDim * s.nFeatures
+}
+
+func (s *Sink) RandomizeParameters() {
+	rm := s.featureWeights.RawMatrix()
+	for i := range rm.Data {
+		rm.Data[i] = rand.NormFloat64()
+	}
 }
 
 func (s *Sink) Parameters(p []float64) []float64 {
@@ -99,57 +104,6 @@ func (s *Sink) SetParameters(p []float64) {
 	copy(rm.Data, p)
 }
 
-// TODO: Add some comment about losser and regularizer are nil
-
-/*
-// Train trains the kitchen sink with the given inputs and outputs and the given weights
-func (sink *Sink) Train(inputs, outputs mat64.Matrix, weights []float64, losser loss.Losser, regularizer regularize.Regularizer) (err error) {
-
-	err = common.VerifyInputs(inputs, outputs, weights)
-	if err != nil {
-		return err
-	}
-
-	_, inputDim := inputs.Dims()
-	_, outputDim := outputs.Dims()
-
-	// Generate the features
-	features := mat64.NewDense(sink.NumFeatures, inputDim, nil)
-	sink.Kernel.Generate(sink.NumFeatures, inputDim, features)
-	sink.features = features
-	sink.inputDim = inputDim
-	sink.outputDim = outputDim
-
-	b := make([]float64, sink.NumFeatures)
-	for i := range b {
-		b[i] = rand.Float64() * math.Pi * 2
-	}
-	sink.b = b
-
-	// See if outputs can be multiplied
-	outputMul, outputIsMulMatrix := outputs.(train.MulMatrix)
-
-	// Given the features, train the weights
-	// See if can use simple linear solve
-	if train.IsLinearSolveRegularizer(regularizer) && train.IsLinearSolveLosser(losser) && outputIsMulMatrix {
-		// It can be solved with a linear solve, so construct wrapper and make the call
-		lin := &linearSink{
-			b:         b,
-			nFeatures: sink.NumFeatures,
-			features:  features,
-		}
-		var err error
-		sink.featureWeights = train.LinearSolve(lin, nil, inputs, outputMul, nil, regularizer)
-		if sink.featureWeights == nil {
-			// TODO: Improve error message
-			return errors.New("error training")
-		}
-		return err
-	}
-	panic("Not yet coded for non-SquaredDistance losser")
-}
-*/
-
 // Predict returns the output at a given input. Returns nil if the length of the inputs
 // does not match the trained number of inputs. The input value is unchanged, but
 // will be modified during a call to the method
@@ -168,7 +122,7 @@ func (sink *Sink) Predict(input []float64, output []float64) ([]float64, error) 
 	return output, nil
 }
 
-func (sink *Sink) PredictBatch(inputs mat64.Matrix, outputs mat64.Mutable) (mat64.Mutable, error) {
+func (sink *Sink) PredictBatch(inputs common.RowMatrix, outputs common.MutableRowMatrix) (mat64.Mutable, error) {
 	batch := batchPredictor{
 		features:       sink.features,
 		featureWeights: sink.featureWeights,
@@ -195,8 +149,8 @@ func (b batchPredictor) Predict(input, output []float64) {
 
 // ComputeZ computes the value of z with the given feature vector and b value.
 // Sqrt2OverD = math.Sqrt(2.0 / len(nFeatures))
-func computeZ(input, feature []float64, b float64, sqrt2OverD float64) float64 {
-	dot := floats.Dot(input, feature)
+func computeZ(featurizedInput, feature []float64, b float64, sqrt2OverD float64) float64 {
+	dot := floats.Dot(featurizedInput, feature)
 	return sqrt2OverD * (math.Cos(dot + b))
 }
 
@@ -247,8 +201,9 @@ func (sink *Sink) Featurize(input, feature []float64) {
 }
 
 func (s *Sink) NewLossDeriver() train.LossDeriver {
-	return &lossDerivWrapper{
-		s: s,
+	return lossDerivWrapper{
+		nFeatures: s.nFeatures,
+		outputDim: s.outputDim,
 	}
 }
 
@@ -260,14 +215,16 @@ func (s *Sink) NewLossDeriver() train.LossDeriver {
 // is simple, but reggo/train contains more complicated functions if necessary?
 // DerivSink is a wrapper for training with gradient-based optimization
 type lossDerivWrapper struct {
-	s *Sink
+	nFeatures int
+	outputDim int
 }
 
-func (d *lossDerivWrapper) Predict(input, predOutput []float64) {
-	predict(input, d.s.features, d.s.b, d.s.featureWeights, predOutput)
+func (d lossDerivWrapper) Predict(parameters, featurizedInput, predOutput []float64) {
+	featureWeights := mat64.NewDense(d.nFeatures, d.outputDim, parameters)
+	predictFeaturized(featurizedInput, featureWeights, predOutput)
 }
 
-func (d *lossDerivWrapper) Deriv(featurizedInput, predOutput, dLossDPred, dLossDWeight []float64) {
+func (d lossDerivWrapper) Deriv(parameters, featurizedInput, predOutput, dLossDPred, dLossDWeight []float64) {
 	// Form a matrix that has the underlying elements as dLossDWeight so the values are modified in place
 	//lossMat := mat64.NewDense(d.s.nFeatures, d.s.outputDim, dLossDWeight)
 	deriv(featurizedInput, dLossDPred, dLossDWeight)
